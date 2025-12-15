@@ -2,22 +2,40 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Sunny & the Kids Go to Wyoming</title>
   <style>
-    body { margin:0; background:#111; display:flex; justify-content:center; }
-    canvas { background:#cfe9ff; touch-action:none; }
-    .hud{
-      position:fixed; top:10px; left:50%; transform:translateX(-50%);
-      color:#fff; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      background:rgba(0,0,0,.45); padding:8px 12px; border-radius:10px;
-      max-width:92vw; white-space:pre-line;
+    :root { color-scheme: dark; }
+    html, body { height: 100%; margin: 0; background: #0b0b0b; }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: stretch;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right)
+               env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    #wrap { width: min(100vw, 480px); height: 100%; position: relative; }
+    canvas { width: 100%; height: 100%; display: block; touch-action: none; background: #cfe9ff; }
+    .hud {
+      position: absolute;
+      top: 10px; left: 10px; right: 10px;
+      color: #fff;
+      font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: rgba(0,0,0,.50);
+      padding: 10px 12px;
+      border-radius: 14px;
+      white-space: pre-line;
+      pointer-events: none;
+      backdrop-filter: blur(6px);
     }
   </style>
 </head>
 <body>
-  <div class="hud" id="hud">Loading…</div>
-  <canvas id="c" width="900" height="520"></canvas>
+  <div id="wrap">
+    <div class="hud" id="hud">Loading…</div>
+    <!-- Internal resolution; canvas is scaled to iPhone via CSS -->
+    <canvas id="c" width="390" height="844"></canvas>
+  </div>
 
 <script>
 (() => {
@@ -27,192 +45,11 @@
 
   const W = canvas.width, H = canvas.height;
 
-  // --------- Characters ----------
-  // Sunny = wife (white, wavy/curly black hair)
-  const sunny = {
-    x: 140, y: 380, speed: 180,
-    name: "Sunny",
-    style: { skin:"#f2d6c9", hair:"#111", outfit:"#7aa7ff" } // outfit color (not asked, but cute)
-  };
+  // ---------- Helpers ----------
+  const clamp = (v,min,max) => Math.max(min, Math.min(max, v));
+  const dist = (ax,ay,bx,by) => Math.hypot(ax-bx, ay-by);
 
-  // You = dad (white, bald, black beard, wears all black)
-  const dad = {
-    x: 95, y: 410,
-    name: "Dad",
-    style: { skin:"#f2d6c9", hair:"#111", beard:"#111", outfit:"#111" }
-  };
-
-  // Kids
-  const enoch = {
-    x: 170, y: 425,
-    name: "Enoch",
-    style: { skin:"#f2d6c9", hair:"#5b3a1f", outfit:"#4ade80" }
-  };
-
-  const elizabeth = {
-    x: 205, y: 405,
-    name: "Elizabeth",
-    style: { skin:"#f2d6c9", hair:"#3b2a1a", outfit:"#fb7185" }
-  };
-
-  // Items = "Wyoming moments"
-  const items = [
-    { id:"bison",    label:"Bison Sticker 🦬",     msg:"You spot a bison in the distance. Everyone goes “WOW!”", x:720, y:390, r:12, taken:false },
-    { id:"cocoa",    label:"Hot Cocoa ☕",         msg:"Cocoa time. Tiny marshmallows. Big smiles.",            x:470, y:150, r:12, taken:false },
-    { id:"pinecone", label:"Pinecone 🌲",         msg:"A perfect pinecone for the memory box.",                x:230, y:165, r:12, taken:false },
-    { id:"hat",      label:"Cowboy Hat 🤠",       msg:"A cowboy hat makes every kid 10x braver.",              x:805, y:200, r:12, taken:false },
-    { id:"snow",     label:"Snowflake ❄️",        msg:"A snowflake lands on a mitten—gone in a second.",       x:560, y:290, r:12, taken:false },
-    { id:"postcard", label:"Wyoming Postcard ✉️", msg:"You write: “Wish you were here… actually you are!”",     x:140, y:260, r:12, taken:false },
-  ];
-
-  // Goal spot (family photo)
-  const goal = { x:840, y:80, r:18, label:"Family Photo Spot 📸" };
-
-  const mountains = [
-    {x:70,y:300,w:200,h:140}, {x:260,y:270,w:250,h:170}, {x:540,y:300,w:300,h:140}
-  ];
-
-  // --------- Input ----------
-  const keys = new Set();
-  addEventListener("keydown", e => keys.add(e.key.toLowerCase()));
-  addEventListener("keyup",   e => keys.delete(e.key.toLowerCase()));
-
-  // Mobile: drag to move Sunny
-  let drag = null;
-  canvas.addEventListener("pointerdown", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    drag = { sx: (e.clientX-rect.left) * (W/rect.width), sy: (e.clientY-rect.top) * (H/rect.height) };
-    canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    const rect = canvas.getBoundingClientRect();
-    drag.x = (e.clientX-rect.left) * (W/rect.width);
-    drag.y = (e.clientY-rect.top) * (H/rect.height);
-  });
-  canvas.addEventListener("pointerup", () => drag = null);
-
-  // --------- State ----------
-  let collected = [];
-  let popup = null; // {text, t}
-  function showPopup(text) { popup = { text, t: 3.4 }; }
-  function clamp(v,min,max){ return Math.max(min, Math.min(max,v)); }
-
-  // Dad “helps”: he follows Sunny a bit, and auto-collects nearby items too.
-  function follow(follower, target, dt, followSpeed=130) {
-    const dx = target.x - follower.x;
-    const dy = target.y - follower.y;
-    const d = Math.hypot(dx,dy);
-    if (d < 1) return;
-    const desired = 44; // distance to keep
-    if (d > desired) {
-      follower.x += (dx/d) * followSpeed * dt;
-      follower.y += (dy/d) * followSpeed * dt;
-      follower.x = clamp(follower.x, 18, W-18);
-      follower.y = clamp(follower.y, 18, H-18);
-    }
-  }
-
-  function kidWander(kid, anchor, dt) {
-    // gentle bob around anchor
-    kid._t = (kid._t || 0) + dt;
-    const ox = Math.cos(kid._t*1.3) * 10;
-    const oy = Math.sin(kid._t*1.6) * 7;
-    kid.x = clamp(anchor.x + ox + (kid === enoch ? 40 : 65), 18, W-18);
-    kid.y = clamp(anchor.y + oy + (kid === enoch ? 40 : 15), 18, H-18);
-  }
-
-  function tryCollect(who){
-    for (const it of items) {
-      if (it.taken) continue;
-      if (Math.hypot(who.x-it.x, who.y-it.y) < 18 + it.r) {
-        it.taken = true;
-        collected.push(it.label);
-        showPopup(it.msg);
-      }
-    }
-  }
-
-  // --------- Drawing helpers ----------
-  function drawMountains() {
-    ctx.fillStyle = "#9ab1c7";
-    for (const m of mountains) {
-      ctx.beginPath();
-      ctx.moveTo(m.x, m.y+m.h);
-      ctx.lineTo(m.x+m.w*0.5, m.y);
-      ctx.lineTo(m.x+m.w, m.y+m.h);
-      ctx.closePath();
-      ctx.fill();
-      // snow cap
-      ctx.fillStyle = "rgba(255,255,255,.75)";
-      ctx.beginPath();
-      ctx.moveTo(m.x+m.w*0.5, m.y);
-      ctx.lineTo(m.x+m.w*0.42, m.y+m.h*0.18);
-      ctx.lineTo(m.x+m.w*0.58, m.y+m.h*0.18);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#9ab1c7";
-    }
-  }
-
-  function drawCharacter(ch, type){
-    // type: "sunny" | "dad" | "kid"
-    const x = ch.x, y = ch.y;
-    // shadow
-    ctx.fillStyle = "rgba(0,0,0,.18)";
-    ctx.beginPath(); ctx.ellipse(x, y+16, 18, 7, 0, 0, Math.PI*2); ctx.fill();
-
-    // body
-    ctx.fillStyle = ch.style.outfit;
-    ctx.beginPath(); ctx.roundRect(x-14, y-6, 28, 26, 8); ctx.fill();
-
-    // head
-    ctx.fillStyle = ch.style.skin;
-    ctx.beginPath(); ctx.arc(x, y-18, 14, 0, Math.PI*2); ctx.fill();
-
-    // hair / beard details
-    if (type === "sunny") {
-      // wavy/curly black hair: scribble arcs around head
-      ctx.strokeStyle = ch.style.hair;
-      ctx.lineWidth = 3;
-      for (let i=0;i<9;i++){
-        const a = (i/9)*Math.PI*2;
-        const hx = x + Math.cos(a)*14;
-        const hy = (y-18) + Math.sin(a)*12;
-        ctx.beginPath();
-        ctx.arc(hx, hy, 5, 0, Math.PI*1.2);
-        ctx.stroke();
-      }
-      // hair top fill
-      ctx.fillStyle = ch.style.hair;
-      ctx.beginPath(); ctx.arc(x, y-24, 10, Math.PI, Math.PI*2); ctx.fill();
-      ctx.lineWidth = 1;
-    } else if (type === "dad") {
-      // bald: no hair. Add black beard.
-      ctx.fillStyle = ch.style.beard;
-      ctx.beginPath(); ctx.arc(x, y-12, 12, 0, Math.PI); ctx.fill();
-      // little mustache
-      ctx.fillRect(x-7, y-18, 14, 3);
-    } else {
-      // kid hair
-      ctx.fillStyle = ch.style.hair;
-      ctx.beginPath(); ctx.arc(x, y-24, 10, Math.PI, Math.PI*2); ctx.fill();
-    }
-
-    // eyes
-    ctx.fillStyle = "#111";
-    ctx.beginPath(); ctx.arc(x-5, y-20, 1.6, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x+5, y-20, 1.6, 0, Math.PI*2); ctx.fill();
-
-    // name tag
-    ctx.fillStyle = "rgba(0,0,0,.55)";
-    ctx.font = "12px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText(ch.name, x, y-40);
-    ctx.textAlign = "start";
-  }
-
-  // roundRect polyfill-ish (modern browsers support it)
+  // roundRect polyfill for older browsers
   if (!CanvasRenderingContext2D.prototype.roundRect) {
     CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
       const rr = Math.min(r, w/2, h/2);
@@ -227,10 +64,291 @@
     };
   }
 
-  // --------- Main loop ----------
+  // ---------- Characters ----------
+  // Sunny = wife: white skin, straight black hair, beige outfit
+  const sunny = {
+    x: 80, y: H-180, speed: 210,
+    name: "Sunny",
+    r: 18,
+    style: { skin:"#f2d6c9", hair:"#111", outfit:"#d8c6a3" } // beige
+  };
+
+  // You (dad): white skin, bald, black beard, all black outfit
+  const dad = {
+    x: 45, y: H-145,
+    name: "Dad",
+    r: 17,
+    style: { skin:"#f2d6c9", beard:"#111", outfit:"#111" }
+  };
+
+  // Babies (Enoch + Elizabeth)
+  const enoch = {
+    x: 115, y: H-130,
+    name: "Enoch",
+    r: 12,
+    style: { skin:"#f2d6c9", hair:"#2a1c12", outfit:"#93c5fd" } // baby blue
+  };
+
+  const elizabeth = {
+    x: 145, y: H-150,
+    name: "Elizabeth",
+    r: 12,
+    style: { skin:"#f2d6c9", hair:"#2a1c12", outfit:"#f9a8d4" } // baby pink
+  };
+
+  // ---------- Items (Wyoming moments) ----------
+  const items = [
+    { id:"bison",    label:"Bison Sticker 🦬",     msg:"A bison! Everyone whispers, “Whoa…”",            x:300, y:H-260, r:12, taken:false },
+    { id:"cocoa",    label:"Hot Cocoa ☕",         msg:"Warm cocoa. Tiny hands holding the cup.",       x:220, y:220,    r:12, taken:false },
+    { id:"pinecone", label:"Pinecone 🌲",         msg:"A perfect pinecone for the memory box.",        x:80,  y:260,    r:12, taken:false },
+    { id:"hat",      label:"Cowboy Hat 🤠",       msg:"A cowboy hat makes the trip feel magical.",     x:330, y:320,    r:12, taken:false },
+    { id:"snow",     label:"Snowflake ❄️",        msg:"A snowflake lands—then disappears. Still counts.", x:250, y:430, r:12, taken:false },
+    { id:"postcard", label:"Wyoming Postcard ✉️", msg:"You write: “Best adventure with my favorite people.”", x:60, y:380, r:12, taken:false },
+  ];
+
+  const goal = { x:330, y:110, r:18, label:"Family Photo Spot 📸" };
+
+  // ---------- Background elements ----------
+  const mountains = [
+    {x: -20, y: 430, w: 200, h: 170},
+    {x: 110, y: 400, w: 240, h: 200},
+    {x: 250, y: 445, w: 220, h: 160}
+  ];
+
+  // ---------- Input ----------
+  const keys = new Set();
+  addEventListener("keydown", e => keys.add(e.key.toLowerCase()));
+  addEventListener("keyup",   e => keys.delete(e.key.toLowerCase()));
+
+  // iPhone-friendly drag joystick
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    drag = {
+      sx: (e.clientX-rect.left) * (W/rect.width),
+      sy: (e.clientY-rect.top) * (H/rect.height),
+      x: null, y: null
+    };
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const rect = canvas.getBoundingClientRect();
+    drag.x = (e.clientX-rect.left) * (W/rect.width);
+    drag.y = (e.clientY-rect.top) * (H/rect.height);
+  });
+  canvas.addEventListener("pointerup", () => drag = null);
+  canvas.addEventListener("pointercancel", () => drag = null);
+
+  // ---------- State ----------
+  let collected = [];
+  let popup = null; // {text, t}
+
+  function showPopup(text) { popup = { text, t: 3.6 }; }
+
+  function follow(follower, target, dt, followSpeed=165) {
+    const dx = target.x - follower.x;
+    const dy = target.y - follower.y;
+    const d = Math.hypot(dx,dy);
+    if (d < 0.01) return;
+    const desired = 52;
+    if (d > desired) {
+      follower.x += (dx/d) * followSpeed * dt;
+      follower.y += (dy/d) * followSpeed * dt;
+    }
+    follower.x = clamp(follower.x, follower.r, W-follower.r);
+    follower.y = clamp(follower.y, follower.r, H-follower.r);
+  }
+
+  function babyBob(baby, anchor, dt, phaseOffset) {
+    baby._t = (baby._t || 0) + dt;
+    const ox = Math.cos(baby._t*1.4 + phaseOffset) * 14;
+    const oy = Math.sin(baby._t*1.7 + phaseOffset) * 10;
+    baby.x = clamp(anchor.x + 55 + ox + (phaseOffset>0 ? 22 : 0), baby.r, W-baby.r);
+    baby.y = clamp(anchor.y + 45 + oy + (phaseOffset>0 ? -10 : 12), baby.r, H-baby.r);
+  }
+
+  function tryCollect(who) {
+    for (const it of items) {
+      if (it.taken) continue;
+      if (dist(who.x, who.y, it.x, it.y) < who.r + it.r + 6) {
+        it.taken = true;
+        collected.push(it.label);
+        showPopup(it.msg);
+      }
+    }
+  }
+
+  // ---------- Drawing ----------
+  function drawMountains() {
+    ctx.fillStyle = "#97afc6";
+    for (const m of mountains) {
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y+m.h);
+      ctx.lineTo(m.x+m.w*0.5, m.y);
+      ctx.lineTo(m.x+m.w, m.y+m.h);
+      ctx.closePath();
+      ctx.fill();
+
+      // snow cap
+      ctx.fillStyle = "rgba(255,255,255,.78)";
+      ctx.beginPath();
+      ctx.moveTo(m.x+m.w*0.5, m.y);
+      ctx.lineTo(m.x+m.w*0.42, m.y+m.h*0.20);
+      ctx.lineTo(m.x+m.w*0.58, m.y+m.h*0.20);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#97afc6";
+    }
+  }
+
+  function drawCharacter(ch, type) {
+    const x = ch.x, y = ch.y;
+
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,.18)";
+    ctx.beginPath(); ctx.ellipse(x, y + ch.r + 10, ch.r+6, 8, 0, 0, Math.PI*2); ctx.fill();
+
+    // body
+    ctx.fillStyle = ch.style.outfit;
+    const bw = ch.r*2 + 6, bh = ch.r*2 + 10;
+    ctx.roundRect(x-bw/2, y-bh/2+10, bw, bh, 12);
+    ctx.fill();
+
+    // head
+    ctx.fillStyle = ch.style.skin;
+    ctx.beginPath(); ctx.arc(x, y - ch.r*0.9, ch.r, 0, Math.PI*2); ctx.fill();
+
+    // hair / beard
+    if (type === "sunny") {
+      // straight hair: cap + side curtains
+      ctx.fillStyle = ch.style.hair;
+      // top cap
+      ctx.beginPath();
+      ctx.arc(x, y - ch.r*1.15, ch.r*0.95, Math.PI, Math.PI*2);
+      ctx.fill();
+      // left curtain
+      ctx.roundRect(x - ch.r*1.05, y - ch.r*1.0, ch.r*0.55, ch.r*1.7, 8);
+      ctx.fill();
+      // right curtain
+      ctx.roundRect(x + ch.r*0.50, y - ch.r*1.0, ch.r*0.55, ch.r*1.7, 8);
+      ctx.fill();
+    } else if (type === "dad") {
+      // bald: no hair. Beard:
+      ctx.fillStyle = ch.style.beard;
+      ctx.beginPath(); ctx.arc(x, y - ch.r*0.55, ch.r*0.95, 0, Math.PI); ctx.fill();
+      ctx.fillRect(x - ch.r*0.55, y - ch.r*1.05, ch.r*1.1, 3);
+    } else {
+      // baby hair (tiny)
+      ctx.fillStyle = ch.style.hair;
+      ctx.beginPath(); ctx.arc(x, y - ch.r*1.35, ch.r*0.7, Math.PI, Math.PI*2); ctx.fill();
+    }
+
+    // eyes (bigger for babies)
+    ctx.fillStyle = "#111";
+    const eye = (type === "baby") ? 2.2 : 1.8;
+    const eyey = y - ch.r*1.05;
+    ctx.beginPath(); ctx.arc(x - ch.r*0.35, eyey, eye, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + ch.r*0.35, eyey, eye, 0, Math.PI*2); ctx.fill();
+
+    // name label (small)
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.font = "12px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(ch.name, x, y - ch.r*2.35);
+    ctx.textAlign = "start";
+  }
+
+  function drawPopup() {
+    if (!popup) return;
+    const lines = String(popup.text).split("\n");
+    const pad = 12;
+    ctx.font = "16px system-ui";
+    const maxW = W - 24;
+    const lineH = 22;
+    const boxH = pad*2 + lines.length*lineH;
+
+    const bx = 12;
+    const by = 84; // below HUD
+    ctx.fillStyle = "rgba(0,0,0,.58)";
+    ctx.roundRect(bx, by, maxW, boxH, 14);
+    ctx.fill();
+
+    ctx.fillStyle = "#fff";
+    let ty = by + pad + 16;
+    for (const ln of lines) {
+      ctx.fillText(ln, bx + pad, ty);
+      ty += lineH;
+    }
+  }
+
+  function draw(allTaken) {
+    // sky
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = "#cfe9ff";
+    ctx.fillRect(0,0,W,H);
+
+    // sun
+    ctx.fillStyle = "#ffd36a";
+    ctx.beginPath(); ctx.arc(70, 85, 42, 0, Math.PI*2); ctx.fill();
+
+    // mountains
+    drawMountains();
+
+    // ground
+    ctx.fillStyle = "#e8f7d5";
+    ctx.fillRect(0, 520, W, H-520);
+
+    // path
+    ctx.fillStyle = "rgba(120,90,60,.18)";
+    ctx.beginPath();
+    ctx.moveTo(0, H-220);
+    ctx.quadraticCurveTo(W*0.35, H-330, W, H-260);
+    ctx.lineTo(W, H-180);
+    ctx.quadraticCurveTo(W*0.35, H-260, 0, H-150);
+    ctx.closePath();
+    ctx.fill();
+
+    // items
+    for (const it of items) {
+      if (it.taken) continue;
+      ctx.fillStyle = "#ff6b6b";
+      ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.font = "14px system-ui";
+      ctx.fillText("★", it.x-5, it.y+5);
+    }
+
+    // goal
+    ctx.fillStyle = allTaken ? "#38d39f" : "rgba(60,60,60,.35)";
+    ctx.beginPath(); ctx.arc(goal.x, goal.y, goal.r, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.font = "16px system-ui";
+    ctx.fillText("📸", goal.x-9, goal.y+6);
+
+    // characters
+    drawCharacter(enoch, "baby");
+    drawCharacter(elizabeth, "baby");
+    drawCharacter(dad, "dad");
+    drawCharacter(sunny, "sunny");
+
+    // popup
+    drawPopup();
+  }
+
+  function updateHUD(allTaken) {
+    const remaining = items.filter(i=>!i.taken).length;
+    const controls = "Move Sunny: drag on screen (or WASD/arrow keys)";
+    const goalText = allTaken
+      ? "All memories collected! Go to the 📸 at the top-right."
+      : `Collect memories: ${items.length-remaining}/${items.length}`;
+    hud.textContent = `${controls}\n${goalText}\nCollected: ${collected.join(", ") || "—"}`;
+  }
+
+  // ---------- Loop ----------
   let last = performance.now();
-  function loop(now){
-    const dt = (now-last)/1000; last = now;
+  function loop(now) {
+    const dt = (now - last) / 1000; last = now;
 
     // Move Sunny
     let vx = 0, vy = 0;
@@ -242,38 +360,35 @@
     if (drag && drag.x != null) {
       const dx = drag.x - drag.sx;
       const dy = drag.y - drag.sy;
-      const len = Math.hypot(dx,dy) || 1;
-      vx = dx/len; vy = dy/len;
-      if (Math.hypot(dx,dy) < 18) { vx = 0; vy = 0; }
+      const l = Math.hypot(dx,dy) || 1;
+      vx = dx/l; vy = dy/l;
+      if (Math.hypot(dx,dy) < 16) { vx = 0; vy = 0; }
     }
 
-    const len = Math.hypot(vx,vy) || 1;
-    vx/=len; vy/=len;
+    const l2 = Math.hypot(vx,vy) || 1;
+    vx/=l2; vy/=l2;
 
     sunny.x += vx * sunny.speed * dt;
     sunny.y += vy * sunny.speed * dt;
-    sunny.x = clamp(sunny.x, 18, W-18);
-    sunny.y = clamp(sunny.y, 18, H-18);
+    sunny.x = clamp(sunny.x, sunny.r, W-sunny.r);
+    sunny.y = clamp(sunny.y, sunny.r, H-sunny.r);
 
-    // Dad helps by following Sunny
-    follow(dad, sunny, dt, 150);
+    // Family behavior
+    follow(dad, sunny, dt, 190);
+    babyBob(enoch, sunny, dt, -0.7);
+    babyBob(elizabeth, sunny, dt, 0.9);
 
-    // Kids stay close, bobbing around Sunny
-    kidWander(enoch, sunny, dt);
-    kidWander(elizabeth, sunny, dt);
-
-    // Collect (Sunny + Dad can collect)
+    // Collecting
     tryCollect(sunny);
     tryCollect(dad);
 
     const allTaken = items.every(i=>i.taken);
 
-    // Goal check
-    if (allTaken && Math.hypot(sunny.x-goal.x, sunny.y-goal.y) < 18 + goal.r) {
+    // Goal
+    if (allTaken && dist(sunny.x,sunny.y,goal.x,goal.y) < sunny.r + goal.r + 8) {
       showPopup("Family photo time 📸\n\nTo my wife: thanks for being the heart of every adventure. 💛");
     }
 
-    // Popup timer
     if (popup) {
       popup.t -= dt;
       if (popup.t <= 0) popup = null;
@@ -281,83 +396,7 @@
 
     draw(allTaken);
     updateHUD(allTaken);
-
     requestAnimationFrame(loop);
-  }
-
-  function updateHUD(allTaken){
-    const remaining = items.filter(i=>!i.taken).length;
-    const controls = "Move Sunny: Arrow keys / WASD (or drag on mobile)";
-    const goalText = allTaken ? "All memories collected! Go to the 📸 in the top-right." : `Collect memories: ${items.length-remaining}/${items.length}`;
-    hud.textContent = `${controls}\n${goalText}\nCollected: ${collected.join(", ") || "—"}`;
-  }
-
-  function draw(allTaken){
-    ctx.clearRect(0,0,W,H);
-
-    // sky
-    ctx.fillStyle = "#cfe9ff";
-    ctx.fillRect(0,0,W,H);
-
-    // sun
-    ctx.fillStyle = "#ffd36a";
-    ctx.beginPath(); ctx.arc(95, 85, 38, 0, Math.PI*2); ctx.fill();
-
-    // ground
-    ctx.fillStyle = "#e8f7d5";
-    ctx.fillRect(0, 300, W, H-300);
-
-    // mountains
-    drawMountains();
-
-    // items
-    for (const it of items) {
-      if (it.taken) continue;
-      ctx.fillStyle = "#ff6b6b";
-      ctx.beginPath(); ctx.arc(it.x,it.y,it.r,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle = "rgba(0,0,0,.55)";
-      ctx.font = "14px system-ui";
-      ctx.fillText("★", it.x-5, it.y+5);
-    }
-
-    // goal
-    ctx.fillStyle = allTaken ? "#38d39f" : "rgba(60,60,60,.35)";
-    ctx.beginPath(); ctx.arc(goal.x,goal.y,goal.r,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle = "#000";
-    ctx.font = "16px system-ui";
-    ctx.fillText("📸", goal.x-9, goal.y+6);
-
-    // characters (draw order)
-    drawCharacter(enoch, "kid");
-    drawCharacter(elizabeth, "kid");
-    drawCharacter(dad, "dad");
-    drawCharacter(sunny, "sunny");
-
-    // popup card
-    if (popup) {
-      const text = popup.text;
-      const pad = 14;
-      const maxW = Math.min(680, W-40);
-
-      ctx.font = "18px system-ui";
-      const lines = String(text).split("\n");
-      const lineH = 24;
-      const boxH = pad*2 + lines.length*lineH;
-      const boxW = maxW;
-
-      const bx = (W - boxW)/2;
-      const by = 18;
-
-      ctx.fillStyle = "rgba(0,0,0,.55)";
-      ctx.beginPath(); ctx.roundRect(bx, by, boxW, boxH, 14); ctx.fill();
-
-      ctx.fillStyle = "#fff";
-      let ty = by + pad + 18;
-      for (const ln of lines) {
-        ctx.fillText(ln, bx + pad, ty);
-        ty += lineH;
-      }
-    }
   }
 
   requestAnimationFrame(loop);
